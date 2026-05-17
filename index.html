@@ -308,7 +308,7 @@
 <!-- ── Tab: ESun Bank ───────────────────────────────────── -->
 <div id="tab-esun" class="tab-panel">
   <div class="drop-zone" id="esunDrop">
-    <input type="file" id="esunInput" accept=".xlsx" multiple>
+    <input type="file" id="esunInput" accept=".xlsx,.xls" multiple>
     <div class="drop-icon">
       <svg viewBox="0 0 24 24">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -318,7 +318,7 @@
     </div>
     <h2>拖曳檔案到這裡</h2>
     <p class="sub">或點擊選擇檔案（可一次選多個）</p>
-    <span class="hint">交易明細查詢下載-*.xlsx</span>
+    <span class="hint">交易明細查詢下載-*.xlsx / *.xls</span>
   </div>
 
   <div class="options-bar">
@@ -492,30 +492,85 @@
     try {
       if (typeof XLSX === 'undefined') throw new Error('xlsx 解析庫尚未載入，請確認網路連線後重新整理');
 
-      const workbook  = XLSX.read(arrayBuffer, { type: 'array' });
-      const sheetName = workbook.SheetNames[0];
-      const sheet     = workbook.Sheets[sheetName];
-
-      // Convert to array of arrays (raw values as strings)
-      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
-
-      if (raw.length < 8) throw new Error('找不到足夠的資料列');
-
-      // Validate this looks like an ESun transaction export (row 0, col 0 = '交易明細查詢下載')
-      if (!String(raw[0][0]).includes('交易明細查詢下載')) {
-        throw new Error('檔案格式不符：請上傳玉山銀行「交易明細查詢下載」的 xlsx 檔案');
-      }
-
       const isoDate  = document.getElementById('esunOptIsoDate').checked;
       const cleanNum = document.getElementById('esunOptCleanNum').checked;
       const nonBiz   = document.getElementById('esunOptNonBiz').checked;
 
-      // Extract account info from metadata rows
-      const account = String(raw[2][1] || '').trim();  // row 3 col B
-      const period  = String(raw[3][1] || '').trim();  // row 4 col B
+      // Peek at first bytes to decide format: HTML starts with '<', xlsx is a ZIP (PK)
+      const firstBytes = new Uint8Array(arrayBuffer.slice(0, 5));
+      const isHtmlXls  = firstBytes[0] === 0x3C; // '<'
 
-      // Column headers are in row index 6 (row 7 in the file)
-      // Data rows start at index 7 (row 8)
+      if (isHtmlXls) {
+        // ── Web banking format (.xls = HTML) ─────────────────────────────────
+        // Parse raw HTML so * non-business-day markers are preserved
+        const htmlText = new TextDecoder('utf-8').decode(new Uint8Array(arrayBuffer));
+        const doc      = new DOMParser().parseFromString(htmlText, 'text/html');
+        const tables   = doc.querySelectorAll('table');
+
+        if (tables.length < 2) throw new Error('找不到交易資料表格（預期有兩個表格）');
+
+        // Table 0: metadata  –  Table 1: transaction data
+        const metaRows  = Array.from(tables[0].querySelectorAll('tr'));
+        const cell = (tr, idx) => (tr?.querySelectorAll('td')[idx]?.textContent || '').trim();
+        const account = cell(metaRows[0], 1);
+        const period  = cell(metaRows[1], 1);
+
+        const txRows = Array.from(tables[1].querySelectorAll('tr'));
+        if (txRows.length < 2) throw new Error('找不到有效的交易資料列');
+
+        const csvHeader = nonBiz
+          ? ['交易日期','非營業日','交易時間','摘要','提','存','帳戶餘額','存摺備註','對方銀行代碼/帳號','轉帳留言']
+          : ['交易日期','交易時間','摘要','提','存','帳戶餘額','存摺備註','對方銀行代碼/帳號','轉帳留言'];
+
+        const lines = [csvHeader.map(q).join(',')];
+        let count = 0;
+        const num = cleanNum ? (s => s.replace(/[\s,]/g, '')) : (s => s);
+
+        for (let i = 1; i < txRows.length; i++) {  // row 0 is the header row
+          const tds      = Array.from(txRows[i].querySelectorAll('td'));
+          if (tds.length < 9) continue;
+          const td = idx => tds[idx].textContent.trim();
+
+          const rawDate   = td(0);
+          const isNonBizRow = rawDate.startsWith('*');
+          const cleanDate   = rawDate.replace(/^\*/, '');
+          const date = (isoDate && /^\d{4}\/\d{2}\/\d{2}$/.test(cleanDate))
+            ? cleanDate.replace(/\//g, '-')
+            : cleanDate;
+
+          const csvRow = nonBiz
+            ? [date, isNonBizRow ? '是' : '', td(1), td(2), num(td(3)), num(td(4)), num(td(5)), td(6), td(7), td(8)]
+            : [date, td(1), td(2), num(td(3)), num(td(4)), num(td(5)), td(6), td(7), td(8)];
+
+          lines.push(csvRow.map(q).join(','));
+          count++;
+        }
+
+        if (count === 0) throw new Error('找不到有效的交易資料列');
+
+        const csv  = '﻿' + lines.join('\r\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url  = URL.createObjectURL(blob);
+        addResult(esunResults, filename, {
+          url, out: filename.replace(/\.xlsx?$/i, '') + '.csv', count,
+          detail: `${account}　${period}　${count} 筆`
+        }, null);
+        return;
+      }
+
+      // ── iOS app format (.xlsx) ────────────────────────────────────────────
+      const workbook  = XLSX.read(arrayBuffer, { type: 'array' });
+      const sheet     = workbook.Sheets[workbook.SheetNames[0]];
+      const raw       = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+
+      if (raw.length < 8) throw new Error('找不到足夠的資料列');
+      if (!String(raw[0][0]).includes('交易明細查詢下載')) {
+        throw new Error('檔案格式不符：請上傳玉山銀行「交易明細查詢下載」的 xlsx 檔案');
+      }
+
+      const account = String(raw[2][1] || '').trim();
+      const period  = String(raw[3][1] || '').trim();
+
       const csvHeader = nonBiz
         ? ['交易日期','非營業日','交易時間','摘要','提','手續費','存','帳戶餘額','存摺備註','銀行代號/帳號','轉帳留言','財金序號']
         : ['交易日期','交易時間','摘要','提','手續費','存','帳戶餘額','存摺備註','銀行代號/帳號','轉帳留言','財金序號'];
@@ -524,41 +579,27 @@
       let count = 0;
 
       for (let i = 7; i < raw.length; i++) {
-        const row = raw[i];
-        // Stop at footer note row or empty rows
+        const row       = raw[i];
         const firstCell = String(row[0] || '').trim();
         if (firstCell === '' || firstCell.startsWith('提醒您')) break;
 
-        // Column mapping: A=date, B=time, C=summary, D=withdrawal, E=fee, F=deposit, G=balance, H=remark, I=bank/acct, J=msg, K=seq
-        const dateRaw   = firstCell;
-        const time      = String(row[1] || '').trim();
-        const summary   = String(row[2] || '').trim();
-        const withdraw  = String(row[3] || '').trim();
-        const fee       = String(row[4] || '').trim();
-        const deposit   = String(row[5] || '').trim();
-        const balance   = String(row[6] || '').trim();
-        const remark    = String(row[7] || '').trim();
-        const bankAcct  = String(row[8] || '').trim();
-        const txMsg     = String(row[9] || '').trim();
-        const seqNo     = String(row[10] || '').trim();
-
-        // Handle non-business day marker (*) in date
-        const isNonBiz  = dateRaw.startsWith('*');
-        const cleanDate = dateRaw.replace(/^\*/, '');
-
-        // Convert date from YYYY/MM/DD to YYYY-MM-DD
+        const isNonBizRow = firstCell.startsWith('*');
+        const cleanDate   = firstCell.replace(/^\*/, '');
         const date = (isoDate && /^\d{4}\/\d{2}\/\d{2}$/.test(cleanDate))
           ? cleanDate.replace(/\//g, '-')
           : cleanDate;
 
-        // Clean number strings: remove leading/trailing spaces and commas
-        const num = cleanNum
-          ? (s => s.replace(/[\s,]/g, ''))
-          : (s => s.trim());
+        const num = cleanNum ? (s => s.replace(/[\s,]/g, '')) : (s => s.trim());
 
         const csvRow = nonBiz
-          ? [date, isNonBiz ? '是' : '', time, summary, num(withdraw), num(fee), num(deposit), num(balance), remark, bankAcct, txMsg, seqNo]
-          : [date, time, summary, num(withdraw), num(fee), num(deposit), num(balance), remark, bankAcct, txMsg, seqNo];
+          ? [date, isNonBizRow ? '是' : '', String(row[1]||'').trim(), String(row[2]||'').trim(),
+             num(String(row[3]||'').trim()), num(String(row[4]||'').trim()), num(String(row[5]||'').trim()),
+             num(String(row[6]||'').trim()), String(row[7]||'').trim(), String(row[8]||'').trim(),
+             String(row[9]||'').trim(), String(row[10]||'').trim()]
+          : [date, String(row[1]||'').trim(), String(row[2]||'').trim(),
+             num(String(row[3]||'').trim()), num(String(row[4]||'').trim()), num(String(row[5]||'').trim()),
+             num(String(row[6]||'').trim()), String(row[7]||'').trim(), String(row[8]||'').trim(),
+             String(row[9]||'').trim(), String(row[10]||'').trim()];
 
         lines.push(csvRow.map(q).join(','));
         count++;
@@ -569,10 +610,11 @@
       const csv  = '﻿' + lines.join('\r\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url  = URL.createObjectURL(blob);
-      const out  = filename.replace(/\.xlsx$/i, '') + '.csv';
-      const detail = `${account}　${period}　${count} 筆`;
+      addResult(esunResults, filename, {
+        url, out: filename.replace(/\.xlsx?$/i, '') + '.csv', count,
+        detail: `${account}　${period}　${count} 筆`
+      }, null);
 
-      addResult(esunResults, filename, { url, out, count, detail }, null);
     } catch (err) {
       addResult(esunResults, filename, null, err.message);
     }
