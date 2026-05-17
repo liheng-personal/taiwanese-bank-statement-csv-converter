@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>台新證券對帳單轉換器</title>
+  <title>台灣銀行對帳單轉換器</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -20,7 +21,7 @@
 
     header {
       text-align: center;
-      margin-bottom: 36px;
+      margin-bottom: 28px;
     }
 
     header h1 {
@@ -36,9 +37,40 @@
       font-size: 14px;
     }
 
+    /* ── Tabs ────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      background: #e5e7eb;
+      border-radius: 10px;
+      padding: 4px;
+      margin-bottom: 24px;
+    }
+
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-radius: 7px;
+      padding: 8px 22px;
+      font-size: 14px;
+      font-weight: 500;
+      color: #6b7280;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .tab-btn.active {
+      background: #ffffff;
+      color: #1a1a2e;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    .tab-panel { display: none; width: 100%; max-width: 560px; flex-direction: column; align-items: center; }
+    .tab-panel.active { display: flex; }
+
+    /* ── Drop zone ───────────────────────────────────────── */
     .drop-zone {
       width: 100%;
-      max-width: 560px;
       background: #ffffff;
       border: 2px dashed #d1d5db;
       border-radius: 16px;
@@ -108,15 +140,16 @@
       font-family: ui-monospace, "SF Mono", Menlo, monospace;
     }
 
+    /* ── Options bar ─────────────────────────────────────── */
     .options-bar {
       width: 100%;
-      max-width: 560px;
       margin-top: 16px;
       display: flex;
       align-items: center;
       gap: 20px;
       font-size: 13px;
       color: #6b7280;
+      flex-wrap: wrap;
     }
 
     .options-bar label {
@@ -133,9 +166,9 @@
       height: 14px;
     }
 
+    /* ── Results ─────────────────────────────────────────── */
     .results {
       width: 100%;
-      max-width: 560px;
       margin-top: 24px;
       display: flex;
       flex-direction: column;
@@ -232,72 +265,122 @@
 <body>
 
 <header>
-  <h1>台新證券對帳單轉換器</h1>
-  <p>將台新證券下載的 .xls 對帳單轉換為標準 CSV 格式</p>
+  <h1>台灣銀行對帳單轉換器</h1>
+  <p>在瀏覽器本機處理，檔案不會上傳至任何伺服器</p>
 </header>
 
-<div class="drop-zone" id="dropZone">
-  <input type="file" id="fileInput" accept=".xls,.htm,.html" multiple>
-  <div class="drop-icon">
-    <svg viewBox="0 0 24 24">
-      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-      <polyline points="17 8 12 3 7 8"/>
-      <line x1="12" y1="3" x2="12" y2="15"/>
-    </svg>
+<!-- Tab navigation -->
+<div class="tabs">
+  <button class="tab-btn active" data-tab="taishin">台新證券</button>
+  <button class="tab-btn" data-tab="esun">玉山銀行</button>
+</div>
+
+<!-- ── Tab: Taishin Securities ──────────────────────────── -->
+<div id="tab-taishin" class="tab-panel active">
+  <div class="drop-zone" id="taishinDrop">
+    <input type="file" id="taishinInput" accept=".xls,.htm,.html" multiple>
+    <div class="drop-icon">
+      <svg viewBox="0 0 24 24">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+    </div>
+    <h2>拖曳檔案到這裡</h2>
+    <p class="sub">或點擊選擇檔案（可一次選多個）</p>
+    <span class="hint">台新證券對帳單-*.xls</span>
   </div>
-  <h2>拖曳檔案到這裡</h2>
-  <p class="sub">或點擊選擇檔案（可一次選多個）</p>
-  <span class="hint">台新證券對帳單-*.xls</span>
+
+  <div class="options-bar">
+    <label>
+      <input type="checkbox" id="tsOptIsoDate" checked>
+      日期轉 YYYY-MM-DD
+    </label>
+    <label>
+      <input type="checkbox" id="tsOptSplitStock" checked>
+      拆分股票代號 / 名稱
+    </label>
+  </div>
+
+  <div class="results" id="taishinResults"></div>
 </div>
 
-<div class="options-bar">
-  <label>
-    <input type="checkbox" id="optIsoDate" checked>
-    日期轉 YYYY-MM-DD
-  </label>
-  <label>
-    <input type="checkbox" id="optSplitStock" checked>
-    拆分股票代號 / 名稱
-  </label>
-</div>
+<!-- ── Tab: ESun Bank ───────────────────────────────────── -->
+<div id="tab-esun" class="tab-panel">
+  <div class="drop-zone" id="esunDrop">
+    <input type="file" id="esunInput" accept=".xlsx" multiple>
+    <div class="drop-icon">
+      <svg viewBox="0 0 24 24">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" y1="3" x2="12" y2="15"/>
+      </svg>
+    </div>
+    <h2>拖曳檔案到這裡</h2>
+    <p class="sub">或點擊選擇檔案（可一次選多個）</p>
+    <span class="hint">交易明細查詢下載-*.xlsx</span>
+  </div>
 
-<div class="results" id="results"></div>
+  <div class="options-bar">
+    <label>
+      <input type="checkbox" id="esunOptIsoDate" checked>
+      日期轉 YYYY-MM-DD
+    </label>
+    <label>
+      <input type="checkbox" id="esunOptCleanNum" checked>
+      移除數字千分位
+    </label>
+    <label>
+      <input type="checkbox" id="esunOptNonBiz" checked>
+      標記非營業日欄位
+    </label>
+  </div>
+
+  <div class="results" id="esunResults"></div>
+</div>
 
 <footer>在瀏覽器本機處理，檔案不會上傳至任何伺服器</footer>
 
 <script>
-  const dropZone  = document.getElementById('dropZone');
-  const fileInput = document.getElementById('fileInput');
-  const results   = document.getElementById('results');
-
-  // ── Drag & drop ────────────────────────────────────────
-  dropZone.addEventListener('dragover', e => {
-    e.preventDefault();
-    dropZone.classList.add('drag-over');
-  });
-  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-  dropZone.addEventListener('drop', e => {
-    e.preventDefault();
-    dropZone.classList.remove('drag-over');
-    processFiles(Array.from(e.dataTransfer.files));
-  });
-  fileInput.addEventListener('change', () => {
-    processFiles(Array.from(fileInput.files));
-    fileInput.value = ''; // allow re-selecting same file
+  // ── Tab switching ───────────────────────────────────────
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
   });
 
-  // ── File reading ────────────────────────────────────────
-  function processFiles(files) {
+  // ══════════════════════════════════════════════════════════
+  // TAISHIN SECURITIES converter
+  // ══════════════════════════════════════════════════════════
+  const taishinDrop    = document.getElementById('taishinDrop');
+  const taishinInput   = document.getElementById('taishinInput');
+  const taishinResults = document.getElementById('taishinResults');
+
+  taishinDrop.addEventListener('dragover', e => { e.preventDefault(); taishinDrop.classList.add('drag-over'); });
+  taishinDrop.addEventListener('dragleave', () => taishinDrop.classList.remove('drag-over'));
+  taishinDrop.addEventListener('drop', e => {
+    e.preventDefault();
+    taishinDrop.classList.remove('drag-over');
+    taishinProcessFiles(Array.from(e.dataTransfer.files));
+  });
+  taishinInput.addEventListener('change', () => {
+    taishinProcessFiles(Array.from(taishinInput.files));
+    taishinInput.value = '';
+  });
+
+  function taishinProcessFiles(files) {
     files.forEach(file => {
       const reader = new FileReader();
-      reader.onload  = ev => convertFile(file.name, ev.target.result);
-      reader.onerror = ()  => addResult(file.name, null, 'FileReader 讀取失敗');
+      reader.onload  = ev => taishinConvert(file.name, ev.target.result);
+      reader.onerror = ()  => addResult(taishinResults, file.name, null, 'FileReader 讀取失敗');
       reader.readAsText(file, 'utf-8');
     });
   }
 
-  // ── Conversion logic ────────────────────────────────────
-  function convertFile(filename, raw) {
+  function taishinConvert(filename, raw) {
     try {
       const parser = new DOMParser();
       const doc    = parser.parseFromString(raw, 'text/html');
@@ -305,10 +388,9 @@
 
       if (rows.length < 2) throw new Error('找不到資料列（table row < 2）');
 
-      const isoDate    = document.getElementById('optIsoDate').checked;
-      const splitStock = document.getElementById('optSplitStock').checked;
+      const isoDate    = document.getElementById('tsOptIsoDate').checked;
+      const splitStock = document.getElementById('tsOptSplitStock').checked;
 
-      // CSV header
       const header = splitStock
         ? ['帳號','姓名','股票代號','股票名稱','交易日期','交易別','股數','成交價',
            '價金','手續費','交易稅','健保補充費','自備款/保證金','融資金額/擔保品',
@@ -320,18 +402,16 @@
       const lines = [header.map(q).join(',')];
       let count = 0;
 
-      // Skip row[0] (header row from the HTML table)
       for (let i = 1; i < rows.length; i++) {
         const cells = Array.from(rows[i].querySelectorAll('td'));
         if (cells.length < 18) continue;
 
-        // Helper: get cell text, strip zero-width spaces (U+200B)
         const cell = idx => cells[idx].textContent.replace(/​/g, '').trim();
 
         const account    = cell(0);
         const name       = cell(1);
-        const stockRaw   = cell(2);  // e.g. "0050\n元大台灣50"
-        const dateRaw    = cell(3);  // YYYYMMDD
+        const stockRaw   = cell(2);
+        const dateRaw    = cell(3);
         const txType     = cell(4);
         const shares     = cell(5);
         const price      = cell(6);
@@ -347,12 +427,10 @@
         const orderId    = cell(16);
         const profitLoss = cell(17);
 
-        // Split stock code and name
         const nlIdx     = stockRaw.indexOf('\n');
         const stockCode = nlIdx >= 0 ? stockRaw.slice(0, nlIdx).trim() : stockRaw;
         const stockName = nlIdx >= 0 ? stockRaw.slice(nlIdx + 1).trim() : '';
 
-        // Format date
         const date = (isoDate && /^\d{8}$/.test(dateRaw))
           ? dateRaw.slice(0,4) + '-' + dateRaw.slice(4,6) + '-' + dateRaw.slice(6,8)
           : dateRaw;
@@ -371,19 +449,139 @@
 
       if (count === 0) throw new Error('找不到有效的交易資料列');
 
-      // UTF-8 BOM so Excel opens it correctly
       const csv  = '﻿' + lines.join('\r\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url  = URL.createObjectURL(blob);
       const out  = filename.replace(/\.xls[x]?$/i, '') + '.csv';
 
-      addResult(filename, { url, out, count }, null);
+      addResult(taishinResults, filename, { url, out, count }, null);
     } catch (err) {
-      addResult(filename, null, err.message);
+      addResult(taishinResults, filename, null, err.message);
     }
   }
 
-  // CSV quoting
+  // ══════════════════════════════════════════════════════════
+  // ESUN BANK converter
+  // ══════════════════════════════════════════════════════════
+  const esunDrop    = document.getElementById('esunDrop');
+  const esunInput   = document.getElementById('esunInput');
+  const esunResults = document.getElementById('esunResults');
+
+  esunDrop.addEventListener('dragover', e => { e.preventDefault(); esunDrop.classList.add('drag-over'); });
+  esunDrop.addEventListener('dragleave', () => esunDrop.classList.remove('drag-over'));
+  esunDrop.addEventListener('drop', e => {
+    e.preventDefault();
+    esunDrop.classList.remove('drag-over');
+    esunProcessFiles(Array.from(e.dataTransfer.files));
+  });
+  esunInput.addEventListener('change', () => {
+    esunProcessFiles(Array.from(esunInput.files));
+    esunInput.value = '';
+  });
+
+  function esunProcessFiles(files) {
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload  = ev => esunConvert(file.name, ev.target.result);
+      reader.onerror = ()  => addResult(esunResults, file.name, null, 'FileReader 讀取失敗');
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function esunConvert(filename, arrayBuffer) {
+    try {
+      if (typeof XLSX === 'undefined') throw new Error('xlsx 解析庫尚未載入，請確認網路連線後重新整理');
+
+      const workbook  = XLSX.read(arrayBuffer, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const sheet     = workbook.Sheets[sheetName];
+
+      // Convert to array of arrays (raw values as strings)
+      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+
+      if (raw.length < 8) throw new Error('找不到足夠的資料列');
+
+      // Validate this looks like an ESun transaction export (row 0, col 0 = '交易明細查詢下載')
+      if (!String(raw[0][0]).includes('交易明細查詢下載')) {
+        throw new Error('檔案格式不符：請上傳玉山銀行「交易明細查詢下載」的 xlsx 檔案');
+      }
+
+      const isoDate  = document.getElementById('esunOptIsoDate').checked;
+      const cleanNum = document.getElementById('esunOptCleanNum').checked;
+      const nonBiz   = document.getElementById('esunOptNonBiz').checked;
+
+      // Extract account info from metadata rows
+      const account = String(raw[2][1] || '').trim();  // row 3 col B
+      const period  = String(raw[3][1] || '').trim();  // row 4 col B
+
+      // Column headers are in row index 6 (row 7 in the file)
+      // Data rows start at index 7 (row 8)
+      const csvHeader = nonBiz
+        ? ['交易日期','非營業日','交易時間','摘要','提','手續費','存','帳戶餘額','存摺備註','銀行代號/帳號','轉帳留言','財金序號']
+        : ['交易日期','交易時間','摘要','提','手續費','存','帳戶餘額','存摺備註','銀行代號/帳號','轉帳留言','財金序號'];
+
+      const lines = [csvHeader.map(q).join(',')];
+      let count = 0;
+
+      for (let i = 7; i < raw.length; i++) {
+        const row = raw[i];
+        // Stop at footer note row or empty rows
+        const firstCell = String(row[0] || '').trim();
+        if (firstCell === '' || firstCell.startsWith('提醒您')) break;
+
+        // Column mapping: A=date, B=time, C=summary, D=withdrawal, E=fee, F=deposit, G=balance, H=remark, I=bank/acct, J=msg, K=seq
+        const dateRaw   = firstCell;
+        const time      = String(row[1] || '').trim();
+        const summary   = String(row[2] || '').trim();
+        const withdraw  = String(row[3] || '').trim();
+        const fee       = String(row[4] || '').trim();
+        const deposit   = String(row[5] || '').trim();
+        const balance   = String(row[6] || '').trim();
+        const remark    = String(row[7] || '').trim();
+        const bankAcct  = String(row[8] || '').trim();
+        const txMsg     = String(row[9] || '').trim();
+        const seqNo     = String(row[10] || '').trim();
+
+        // Handle non-business day marker (*) in date
+        const isNonBiz  = dateRaw.startsWith('*');
+        const cleanDate = dateRaw.replace(/^\*/, '');
+
+        // Convert date from YYYY/MM/DD to YYYY-MM-DD
+        const date = (isoDate && /^\d{4}\/\d{2}\/\d{2}$/.test(cleanDate))
+          ? cleanDate.replace(/\//g, '-')
+          : cleanDate;
+
+        // Clean number strings: remove leading/trailing spaces and commas
+        const num = cleanNum
+          ? (s => s.replace(/[\s,]/g, ''))
+          : (s => s.trim());
+
+        const csvRow = nonBiz
+          ? [date, isNonBiz ? '是' : '', time, summary, num(withdraw), num(fee), num(deposit), num(balance), remark, bankAcct, txMsg, seqNo]
+          : [date, time, summary, num(withdraw), num(fee), num(deposit), num(balance), remark, bankAcct, txMsg, seqNo];
+
+        lines.push(csvRow.map(q).join(','));
+        count++;
+      }
+
+      if (count === 0) throw new Error('找不到有效的交易資料列');
+
+      const csv  = '﻿' + lines.join('\r\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url  = URL.createObjectURL(blob);
+      const out  = filename.replace(/\.xlsx$/i, '') + '.csv';
+      const detail = `${account}　${period}　${count} 筆`;
+
+      addResult(esunResults, filename, { url, out, count, detail }, null);
+    } catch (err) {
+      addResult(esunResults, filename, null, err.message);
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // Shared helpers
+  // ══════════════════════════════════════════════════════════
+
   function q(val) {
     const s = String(val == null ? '' : val);
     return (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r'))
@@ -391,8 +589,7 @@
       : s;
   }
 
-  // ── UI helpers ──────────────────────────────────────────
-  function addResult(filename, ok, errorMsg) {
+  function addResult(container, filename, ok, errorMsg) {
     const item = document.createElement('div');
     item.className = 'result-item';
 
@@ -407,10 +604,11 @@
         a.click();
       });
 
+      const detail = ok.detail || `${ok.count} 筆交易記錄 → ${esc(ok.out)}`;
       const icon = `<div class="result-icon ok"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>`;
       const text = `<div class="result-text">
         <div class="fname">${esc(filename)}</div>
-        <div class="detail">${ok.count} 筆交易記錄 → ${esc(ok.out)}</div>
+        <div class="detail">${esc(detail)}</div>
       </div>`;
 
       item.innerHTML = icon + text;
@@ -429,7 +627,7 @@
         </div>`;
     }
 
-    results.prepend(item);
+    container.prepend(item);
   }
 
   function esc(s) {
